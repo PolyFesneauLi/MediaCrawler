@@ -96,6 +96,7 @@ async def update_up_info(video_item: Dict):
         "total_liked": video_item_card_list.get("like_num"),
         "user_rank": video_item_card.get("level_info").get("current_level"),
         "is_official": video_item_card.get("official_verify").get("type"),
+        "source_keyword": source_keyword_var.get(),
     }
     utils.logger.info(f"[store.bilibili.update_up_info] bilibili user_id:{video_item_card.get('mid')}")
     await BiliStoreFactory.create_store().store_creator(creator=saver_up_info)
@@ -128,6 +129,7 @@ async def update_bilibili_video_comment(video_id: str, comment_item: Dict):
         "sub_comment_count": str(comment_item.get("rcount", 0)),
         "like_count": like_count,
         "last_modify_ts": utils.get_current_timestamp(),
+        "source_keyword": source_keyword_var.get(),
     }
     utils.logger.info(f"[store.bilibili.update_bilibili_video_comment] Bilibili video comment: {comment_id}, content: {save_comment_item.get('content')}")
     await BiliStoreFactory.create_store().store_comment(comment_item=save_comment_item)

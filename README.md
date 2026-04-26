@@ -156,6 +156,56 @@ uv run main.py --help
 > `data/bili/阶段1_原始抓取`、`data/bili/阶段2_清洗标准化`、`data/bili/阶段3_筛选结果`、`data/bili/阶段4_分析汇总`。
 > 这些阶段文件基于公开内容做规则化整理与摘要，不会额外采集个人身份信息。
 
+#### 命令行批量搜索模板
+
+如果你要从文本文件逐行读取关键词，并对 B 站执行 1 个月范围内的搜索，可以直接用下面这种模板：
+
+```shell
+uv run main.py --platform bili --lt qrcode --type search ^
+  --keywords_file keywords.txt ^
+  --start_day 2024-04-20 ^
+  --end_day 2026-04-20 ^
+  --bili_search_mode all_in_time_range ^
+  --crawler_max_notes_count 5 ^  
+  --max_notes_per_day 100
+```
+crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔记数量，max_notes_per_day 参数限制了每个关键词每天最多生成的结果数量
+
+`keywords.txt` 建议一行一个关键词，空行和 `#` 开头的注释行会被忽略。每个关键词会单独生成一个结果目录，目录名会带上关键词和时间戳，下面再分成四个阶段子目录。
+
+当 `keywords.txt` 有 N 行有效关键词时，程序会按行顺序执行 N 次独立爬虫：每行关键词对应一次 `--type search` 运行，并生成 1 个对应的结果目录。
+
+最终会在 `data/bili/` 目录下生成 N 个以关键词命名的结果目录，每个目录里包含四个阶段的结果文件，方便后续分析和对比。
+阶段四中
+
+主要痛点大类是根据`"top_pain_categories": category_counter.most_common(10)`这个字段来分析的，旨在帮助用户快速了解当前与关键词相关的内容中，最常出现的痛点类别是什么，这些类别是通过对评论文本进行分类统计得出的。
+
+结果分数计算公式是：
+`score = 0.5 * relevance_score + 0.3 * engagement_score + 0.2 * recency_score`，
+其中：
+- `relevance_score`：基于关键词匹配度的相关性评分，范围
+0-1，越高表示内容与关键词越相关
+- `engagement_score`：基于视频的互动数据（点赞、评论、转
+发等）计算的参与度评分，范围 0-1，越高表示视频互动越活跃
+- `recency_score`：基于视频发布时间距离当前时间的评分，范围 0-1，越高表示视频越新鲜
+
+#### 阶段5：需求洞察增强（可选）
+
+如果你希望对某一个关键词目录做更细化的“中学教师痛点需求”分析（包含覆盖率、证据样本、AI方向建议），可以执行：
+
+```shell
+python tools/bili_pain_insight.py --run-folder 新手教师_崩溃_经历_20260426_214211
+```
+
+参数说明：
+- `--run-folder`：`data/bili` 下一层要处理的目录名（必须传）
+- `--data-root`：可选，默认 `data/bili`
+
+执行后会在该目录下新增 `阶段5_需求洞察增强` 子目录，输出：
+- `pain_insight_时间戳.json`
+- `pain_insight_时间戳.md`
+
+
 <details>
 <summary>🖥️ <strong>WebUI 可视化操作界面</strong></summary>
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 
 import sys
+from pathlib import Path
 from enum import Enum
 from types import SimpleNamespace
 from typing import Iterable, Optional, Sequence, Type, TypeVar
@@ -135,6 +136,27 @@ def _inject_init_db_default(args: Sequence[str]) -> list[str]:
     return normalized
 
 
+def _load_keywords_from_file(keywords_file: str) -> list[str]:
+    """Load newline-delimited keywords from a text file."""
+
+    if not keywords_file:
+        return []
+
+    file_path = Path(keywords_file).expanduser()
+    if not file_path.exists():
+        raise FileNotFoundError(f"keywords_file not found: {file_path}")
+
+    keywords: list[str] = []
+    with file_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            keyword = line.strip()
+            if not keyword or keyword.startswith("#"):
+                continue
+            keywords.append(keyword)
+
+    return keywords
+
+
 async def parse_cmd(argv: Optional[Sequence[str]] = None):
     """Parse command line arguments using Typer."""
 
@@ -182,6 +204,14 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Basic Configuration",
             ),
         ] = config.KEYWORDS,
+        keywords_file: Annotated[
+            str,
+            typer.Option(
+                "--keywords_file",
+                help="Load keywords from a text file, one keyword per line",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
         get_comment: Annotated[
             str,
             typer.Option(
@@ -267,6 +297,46 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Performance Configuration",
             ),
         ] = config.MAX_CONCURRENCY_NUM,
+        crawler_max_notes_count: Annotated[
+            int,
+            typer.Option(
+                "--crawler_max_notes_count",
+                help="Maximum number of posts/videos to crawl per keyword",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.CRAWLER_MAX_NOTES_COUNT,
+        start_day: Annotated[
+            str,
+            typer.Option(
+                "--start_day",
+                help="Search start date for Bilibili time-range mode, format YYYY-MM-DD",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.START_DAY,
+        end_day: Annotated[
+            str,
+            typer.Option(
+                "--end_day",
+                help="Search end date for Bilibili time-range mode, format YYYY-MM-DD",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.END_DAY,
+        max_notes_per_day: Annotated[
+            int,
+            typer.Option(
+                "--max_notes_per_day",
+                help="Maximum number of posts/videos to crawl per day for Bilibili time-range mode",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.MAX_NOTES_PER_DAY,
+        bili_search_mode: Annotated[
+            str,
+            typer.Option(
+                "--bili_search_mode",
+                help="Bilibili search mode (normal | all_in_time_range | daily_limit_in_time_range)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.BILI_SEARCH_MODE,
         save_data_path: Annotated[
             str,
             typer.Option(
@@ -308,6 +378,13 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         enable_headless = _to_bool(headless)
         enable_ip_proxy_value = _to_bool(enable_ip_proxy)
         init_db_value = init_db.value if init_db else None
+        resolved_keywords = keywords
+        keyword_lines: list[str] = []
+        if keywords_file:
+            keyword_lines = _load_keywords_from_file(keywords_file)
+            resolved_keywords = ",".join(keyword_lines)
+            if not keyword_lines:
+                raise ValueError(f"[parse_cmd] No valid keywords found in file: {keywords_file}")
 
         # Parse specified_id and creator_id into lists
         specified_id_list = [id.strip() for id in specified_id.split(",") if id.strip()] if specified_id else []
@@ -318,7 +395,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.LOGIN_TYPE = lt.value
         config.CRAWLER_TYPE = crawler_type.value
         config.START_PAGE = start
-        config.KEYWORDS = keywords
+        config.KEYWORDS = resolved_keywords
         config.ENABLE_GET_COMMENTS = enable_comment
         config.ENABLE_GET_SUB_COMMENTS = enable_sub_comment
         config.HEADLESS = enable_headless
@@ -327,6 +404,12 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.COOKIES = cookies
         config.CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = max_comments_count_singlenotes
         config.MAX_CONCURRENCY_NUM = max_concurrency_num
+        config.CRAWLER_MAX_NOTES_COUNT = crawler_max_notes_count
+        config.START_DAY = start_day
+        config.END_DAY = end_day
+        config.MAX_NOTES_PER_DAY = max_notes_per_day
+        config.BILI_SEARCH_MODE = bili_search_mode
+        config.KEYWORD_LINES = keyword_lines
         config.SAVE_DATA_PATH = save_data_path
         config.ENABLE_IP_PROXY = enable_ip_proxy_value
         config.IP_PROXY_POOL_COUNT = ip_proxy_pool_count
@@ -363,6 +446,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             type=config.CRAWLER_TYPE,
             start=config.START_PAGE,
             keywords=config.KEYWORDS,
+            keyword_lines=keyword_lines,
+            keywords_file=keywords_file,
             get_comment=config.ENABLE_GET_COMMENTS,
             get_sub_comment=config.ENABLE_GET_SUB_COMMENTS,
             headless=config.HEADLESS,
@@ -371,6 +456,11 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             cookies=config.COOKIES,
             specified_id=specified_id,
             creator_id=creator_id,
+            crawler_max_notes_count=config.CRAWLER_MAX_NOTES_COUNT,
+            start_day=config.START_DAY,
+            end_day=config.END_DAY,
+            max_notes_per_day=config.MAX_NOTES_PER_DAY,
+            bili_search_mode=config.BILI_SEARCH_MODE,
         )
 
     command = typer.main.get_command(app)

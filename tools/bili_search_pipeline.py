@@ -20,6 +20,7 @@ import json
 import math
 import re
 import shutil
+from datetime import datetime
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -129,69 +130,143 @@ CATEGORY_RULES = {
 }
 
 
-def run_bilibili_search_pipeline() -> dict[str, Any]:
+def run_bilibili_search_pipeline(
+    source_files: Sequence[Path] | None = None,
+    batch_id: str | None = None,
+    source_offsets: dict[Path, int] | None = None,
+    allowed_keywords: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Run the staged post-processing pipeline for Bilibili search output."""
 
     data_root = Path(config.SAVE_DATA_PATH) if config.SAVE_DATA_PATH else Path("data")
     bili_root = data_root / "bili"
-    source_files = _collect_source_files(bili_root)
+    if source_files is None:
+        source_files = _collect_source_files(bili_root)
+    else:
+        source_files = [Path(path) for path in source_files if Path(path).is_file()]
 
     if not source_files:
         utils.logger.info("[BiliSearchPipeline] No Bilibili search exports found, skipping staged processing.")
         return {"processed": False, "reason": "no_source_files", "data_root": str(bili_root)}
 
-    raw_dir = bili_root / RAW_STAGE_DIR
-    clean_dir = bili_root / CLEAN_STAGE_DIR
-    filter_dir = bili_root / FILTER_STAGE_DIR
-    analysis_dir = bili_root / ANALYSIS_STAGE_DIR
+    resolved_batch_id = str(batch_id or getattr(config, "BILI_SEARCH_BATCH_ID", "")).strip()
+    if not resolved_batch_id:
+        resolved_batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    for directory in (raw_dir, clean_dir, filter_dir, analysis_dir):
-        directory.mkdir(parents=True, exist_ok=True)
+    raw_records = _load_records(source_files, source_offsets=source_offsets)
+    raw_records = _fill_missing_source_keyword(raw_records)
+    if allowed_keywords is not None:
+        allowed_set = {str(keyword).strip() for keyword in allowed_keywords if str(keyword).strip()}
+        if allowed_set:
+            raw_records = [
+                record
+                for record in raw_records
+                if str(record.get("source_keyword", "")).strip() in allowed_set
+            ]
 
-    copied_files = _copy_source_files(source_files, raw_dir)
-    raw_records = _load_records(source_files)
-    clean_records = _clean_records(raw_records)
-    filtered_records = _filter_records(clean_records)
-    analysis = _build_analysis(clean_records, filtered_records)
-
-    timestamp = utils.get_current_date()
-    _write_jsonl(clean_dir / f"cleaned_records_{timestamp}.jsonl", clean_records)
-    _write_json(
-        clean_dir / f"cleaned_manifest_{timestamp}.json",
-        {
-            "generated_at": timestamp,
+    if not raw_records:
+        utils.logger.info("[BiliSearchPipeline] No new records after incremental filtering, skipping staged processing.")
+        return {
+            "processed": False,
+            "reason": "no_new_records",
+            "data_root": str(bili_root),
+            "batch_id": resolved_batch_id,
             "source_files": [str(path) for path in source_files],
-            "copied_files": copied_files,
-            "raw_record_count": len(raw_records),
-            "clean_record_count": len(clean_records),
-        },
-    )
+        }
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    _write_jsonl(filter_dir / f"filtered_records_{timestamp}.jsonl", filtered_records)
-    _write_json(
-        filter_dir / f"filtered_manifest_{timestamp}.json",
-        {
-            "generated_at": timestamp,
-            "source_files": [str(path) for path in source_files],
-            "filtered_record_count": len(filtered_records),
-        },
-    )
+    buckets = _group_records_by_keyword(raw_records)
+    total_clean = 0
+    total_filtered = 0
+    bucket_summaries: list[dict[str, Any]] = []
 
-    _write_json(analysis_dir / f"analysis_summary_{timestamp}.json", analysis)
-    _write_text(analysis_dir / f"analysis_summary_{timestamp}.md", _render_analysis_markdown(analysis))
+    for keyword, keyword_records in buckets.items():
+        run_dir = bili_root / f"{_slugify_keyword(keyword)}_{timestamp}"
+        raw_dir = run_dir / RAW_STAGE_DIR
+        clean_dir = run_dir / CLEAN_STAGE_DIR
+        filter_dir = run_dir / FILTER_STAGE_DIR
+        analysis_dir = run_dir / ANALYSIS_STAGE_DIR
+
+        for directory in (raw_dir, clean_dir, filter_dir, analysis_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+        copied_files = _copy_source_files(source_files, raw_dir)
+        clean_records = _clean_records(keyword_records)
+        filtered_records = _filter_records(clean_records)
+        analysis = _build_analysis(clean_records, filtered_records)
+
+        _write_jsonl(raw_dir / f"raw_records_{timestamp}.jsonl", keyword_records)
+        _write_json(
+            raw_dir / f"raw_manifest_{timestamp}.json",
+            {
+                "generated_at": timestamp,
+                "batch_id": resolved_batch_id,
+                "keyword": keyword,
+                "source_files": [str(path) for path in source_files],
+                "copied_files": copied_files,
+                "raw_record_count": len(keyword_records),
+            },
+        )
+
+        _write_jsonl(clean_dir / f"cleaned_records_{timestamp}.jsonl", clean_records)
+        _write_json(
+            clean_dir / f"cleaned_manifest_{timestamp}.json",
+            {
+                "generated_at": timestamp,
+                "batch_id": resolved_batch_id,
+                "keyword": keyword,
+                "source_files": [str(path) for path in source_files],
+                "raw_record_count": len(keyword_records),
+                "clean_record_count": len(clean_records),
+            },
+        )
+
+        _write_jsonl(filter_dir / f"filtered_records_{timestamp}.jsonl", filtered_records)
+        _write_json(
+            filter_dir / f"filtered_manifest_{timestamp}.json",
+            {
+                "generated_at": timestamp,
+                "batch_id": resolved_batch_id,
+                "keyword": keyword,
+                "source_files": [str(path) for path in source_files],
+                "filtered_record_count": len(filtered_records),
+            },
+        )
+
+        _write_json(analysis_dir / f"analysis_summary_{timestamp}.json", analysis)
+        _write_text(analysis_dir / f"analysis_summary_{timestamp}.md", _render_analysis_markdown(analysis))
+        _cleanup_previous_keyword_results_in_batch(
+            bili_root=bili_root,
+            keyword=keyword,
+            current_run_dir=run_dir,
+            batch_id=resolved_batch_id,
+        )
+
+        total_clean += len(clean_records)
+        total_filtered += len(filtered_records)
+        bucket_summaries.append(
+            {
+                "keyword": keyword,
+                "run_dir": str(run_dir),
+                "raw_record_count": len(keyword_records),
+                "clean_record_count": len(clean_records),
+                "filtered_record_count": len(filtered_records),
+            }
+        )
 
     utils.logger.info(
         "[BiliSearchPipeline] Completed staged processing: "
-        f"raw={len(raw_records)}, clean={len(clean_records)}, filtered={len(filtered_records)}"
+        f"keywords={len(buckets)}, raw={len(raw_records)}, clean={total_clean}, filtered={total_filtered}"
     )
     return {
         "processed": True,
+        "batch_id": resolved_batch_id,
         "data_root": str(bili_root),
         "source_files": [str(path) for path in source_files],
         "raw_record_count": len(raw_records),
-        "clean_record_count": len(clean_records),
-        "filtered_record_count": len(filtered_records),
-        "analysis": analysis,
+        "clean_record_count": total_clean,
+        "filtered_record_count": total_filtered,
+        "keyword_buckets": bucket_summaries,
     }
 
 
@@ -205,6 +280,60 @@ def _collect_source_files(bili_root: Path) -> list[Path]:
     return sorted(set(files))
 
 
+def _cleanup_previous_keyword_results_in_batch(
+    bili_root: Path,
+    keyword: str,
+    current_run_dir: Path,
+    batch_id: str,
+) -> None:
+    slug = _slugify_keyword(keyword)
+    deleted_dirs: list[str] = []
+
+    for candidate in bili_root.glob(f"{slug}_*"):
+        if not candidate.is_dir():
+            continue
+        if candidate.resolve() == current_run_dir.resolve():
+            continue
+
+        manifest = _load_run_raw_manifest(candidate)
+        if not manifest:
+            continue
+
+        manifest_batch_id = str(manifest.get("batch_id", "")).strip()
+        manifest_keyword = str(manifest.get("keyword", "")).strip()
+        if manifest_batch_id != batch_id or manifest_keyword != keyword:
+            continue
+
+        try:
+            shutil.rmtree(candidate)
+            deleted_dirs.append(str(candidate))
+        except OSError as exc:
+            utils.logger.warning(f"[BiliSearchPipeline] Failed to remove old run dir {candidate}: {exc}")
+
+    if deleted_dirs:
+        utils.logger.info(
+            f"[BiliSearchPipeline] Removed {len(deleted_dirs)} previous same-batch result dirs for keyword '{keyword}'."
+        )
+
+
+def _load_run_raw_manifest(run_dir: Path) -> dict[str, Any] | None:
+    raw_dir = run_dir / RAW_STAGE_DIR
+    if not raw_dir.exists() or not raw_dir.is_dir():
+        return None
+
+    manifest_files = sorted(raw_dir.glob("raw_manifest_*.json"), reverse=True)
+    for manifest_file in manifest_files:
+        try:
+            with manifest_file.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    return None
+
+
 def _copy_source_files(source_files: Sequence[Path], target_dir: Path) -> list[str]:
     copied: list[str] = []
     for source_file in source_files:
@@ -214,21 +343,39 @@ def _copy_source_files(source_files: Sequence[Path], target_dir: Path) -> list[s
     return copied
 
 
-def _load_records(source_files: Sequence[Path]) -> list[dict[str, Any]]:
+def _load_records(
+    source_files: Sequence[Path],
+    source_offsets: dict[Path, int] | None = None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    offsets = {
+        Path(path).resolve(): int(offset)
+        for path, offset in (source_offsets or {}).items()
+    }
     for source_file in source_files:
+        source_path = Path(source_file).resolve()
+        start_offset = max(0, offsets.get(source_path, 0))
         if source_file.suffix.lower() == ".jsonl":
-            records.extend(_load_jsonl(source_file))
+            records.extend(_load_jsonl(source_file, start_offset=start_offset))
         elif source_file.suffix.lower() == ".json":
             records.extend(_load_json(source_file))
     return records
 
 
-def _load_jsonl(source_file: Path) -> list[dict[str, Any]]:
+def _load_jsonl(source_file: Path, start_offset: int = 0) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with source_file.open("r", encoding="utf-8") as handle:
+    with source_file.open("rb") as handle:
+        if start_offset:
+            try:
+                handle.seek(start_offset)
+            except OSError:
+                handle.seek(0)
+
         for line in handle:
-            line = line.strip()
+            try:
+                line = line.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                continue
             if not line:
                 continue
             try:
@@ -254,6 +401,62 @@ def _load_json(source_file: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _group_records_by_keyword(raw_records: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for record in raw_records:
+        keyword = str(record.get("source_keyword") or "未标注").strip() or "未标注"
+        buckets.setdefault(keyword, []).append(record)
+    return buckets
+
+
+def _fill_missing_source_keyword(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched_records: list[dict[str, Any]] = []
+    keyword_by_video_id: dict[str, str] = {}
+    keyword_by_user_id: dict[str, str] = {}
+
+    for record in raw_records:
+        source_keyword = str(record.get("source_keyword", "")).strip()
+        if not source_keyword:
+            continue
+
+        video_id = str(record.get("video_id", "")).strip()
+        if video_id and video_id not in keyword_by_video_id:
+            keyword_by_video_id[video_id] = source_keyword
+
+        user_id = str(record.get("user_id", "")).strip()
+        if user_id and user_id not in keyword_by_user_id:
+            keyword_by_user_id[user_id] = source_keyword
+
+    configured_keywords = [part.strip() for part in str(getattr(config, "KEYWORDS", "")).split(",") if part.strip()]
+    fallback_keyword = configured_keywords[0] if len(configured_keywords) == 1 else ""
+
+    for record in raw_records:
+        current_keyword = str(record.get("source_keyword", "")).strip()
+        if current_keyword:
+            enriched_records.append(record)
+            continue
+
+        inferred_keyword = ""
+        video_id = str(record.get("video_id", "")).strip()
+        user_id = str(record.get("user_id", "")).strip()
+
+        if video_id:
+            inferred_keyword = keyword_by_video_id.get(video_id, "")
+        if not inferred_keyword and user_id:
+            inferred_keyword = keyword_by_user_id.get(user_id, "")
+        if not inferred_keyword:
+            inferred_keyword = fallback_keyword
+
+        if inferred_keyword:
+            enriched_record = dict(record)
+            enriched_record["source_keyword"] = inferred_keyword
+            enriched_records.append(enriched_record)
+        else:
+            enriched_records.append(record)
+
+    return enriched_records
+
+
 def _clean_records(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     cleaned: list[dict[str, Any]] = []
@@ -268,6 +471,13 @@ def _clean_records(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]
 
     cleaned.sort(key=lambda item: (item.get("score", 0), item.get("publish_time", 0)), reverse=True)
     return cleaned
+
+
+def _slugify_keyword(keyword: str) -> str:
+    slug = re.sub(r"[\\/:*?\"<>|]+", "_", keyword.strip())
+    slug = re.sub(r"\s+", "_", slug)
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug[:80] or "keyword"
 
 
 def _normalize_record(raw_record: dict[str, Any]) -> dict[str, Any]:

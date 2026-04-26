@@ -30,6 +30,8 @@ if sys.stderr and hasattr(sys.stderr, 'buffer'):
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 import asyncio
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Type
 
 import cmd_arg
@@ -71,6 +73,26 @@ class CrawlerFactory:
 crawler: Optional[AbstractCrawler] = None
 
 
+def _collect_bili_search_source_files() -> set[Path]:
+    data_root = Path(config.SAVE_DATA_PATH) if config.SAVE_DATA_PATH else Path("data")
+    bili_root = data_root / "bili"
+    source_files: set[Path] = set()
+    for pattern in ("jsonl/search_*", "json/search_*"):
+        for path in bili_root.glob(pattern):
+            if path.is_file() and path.suffix.lower() in {".jsonl", ".json"}:
+                source_files.add(path.resolve())
+    return source_files
+
+
+def _collect_bili_search_source_snapshots() -> dict[Path, tuple[int, int]]:
+    snapshots: dict[Path, tuple[int, int]] = {}
+    for path in _collect_bili_search_source_files():
+        stat = path.stat()
+        # Use nanosecond mtime + size to detect append/overwrite changes reliably.
+        snapshots[path] = (int(stat.st_mtime_ns), int(stat.st_size))
+    return snapshots
+
+
 def _flush_excel_if_needed() -> None:
     if config.SAVE_DATA_OPTION != "excel":
         return
@@ -98,6 +120,29 @@ async def _generate_wordcloud_if_needed() -> None:
         print(f"[Main] Error generating wordcloud: {e}")
 
 
+async def _cleanup_crawler_only() -> None:
+    global crawler
+    if not crawler:
+        return
+
+    if getattr(crawler, "cdp_manager", None):
+        try:
+            await crawler.cdp_manager.cleanup(force=True)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "closed" not in error_msg and "disconnected" not in error_msg:
+                print(f"[Main] Error cleaning up CDP browser: {e}")
+    elif getattr(crawler, "browser_context", None):
+        try:
+            await crawler.browser_context.close()
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "closed" not in error_msg and "disconnected" not in error_msg:
+                print(f"[Main] Error closing browser context: {e}")
+
+    crawler = None
+
+
 async def main() -> None:
     global crawler
 
@@ -107,11 +152,44 @@ async def main() -> None:
         print(f"Database {args.init_db} initialized successfully.")
         return
 
-    crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
-    await crawler.start()
+    keyword_lines = getattr(config, "KEYWORD_LINES", [])
+    run_each_keyword = (
+        config.PLATFORM == "bili"
+        and config.CRAWLER_TYPE == "search"
+        and bool(keyword_lines)
+    )
 
-    if config.PLATFORM == "bili" and config.CRAWLER_TYPE == "search":
-        run_bilibili_search_pipeline()
+    if run_each_keyword:
+        batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        config.BILI_SEARCH_BATCH_ID = batch_id
+        for keyword in keyword_lines:
+            source_snapshots_before = _collect_bili_search_source_snapshots()
+            config.KEYWORDS = keyword
+            print(f"[Main] Running Bilibili search for keyword: {keyword}")
+            crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+            await crawler.start()
+            source_snapshots_after = _collect_bili_search_source_snapshots()
+            changed_source_files = sorted(
+                path
+                for path, snapshot in source_snapshots_after.items()
+                if source_snapshots_before.get(path) != snapshot
+            )
+            source_offsets = {
+                path: source_snapshots_before.get(path, (0, 0))[1]
+                for path in changed_source_files
+            }
+            run_bilibili_search_pipeline(
+                source_files=changed_source_files,
+                batch_id=batch_id,
+                source_offsets=source_offsets,
+                allowed_keywords=[keyword],
+            )
+            await _cleanup_crawler_only()
+    else:
+        crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+        await crawler.start()
+        if config.PLATFORM == "bili" and config.CRAWLER_TYPE == "search":
+            run_bilibili_search_pipeline()
 
     _flush_excel_if_needed()
 
@@ -121,23 +199,7 @@ async def main() -> None:
 
 
 async def async_cleanup() -> None:
-    global crawler
-    if crawler:
-        if getattr(crawler, "cdp_manager", None):
-            try:
-                await crawler.cdp_manager.cleanup(force=True)
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "closed" not in error_msg and "disconnected" not in error_msg:
-                    print(f"[Main] Error cleaning up CDP browser: {e}")
-
-        elif getattr(crawler, "browser_context", None):
-            try:
-                await crawler.browser_context.close()
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "closed" not in error_msg and "disconnected" not in error_msg:
-                    print(f"[Main] Error closing browser context: {e}")
+    await _cleanup_crawler_only()
 
     if config.SAVE_DATA_OPTION in ("db", "sqlite"):
         await db.close()
