@@ -161,13 +161,13 @@ uv run main.py --help
 如果你要从文本文件逐行读取关键词，并对 B 站执行 1 个月范围内的搜索，可以直接用下面这种模板：
 
 ```shell
-uv run main.py --platform bili --lt qrcode --type search ^
+uv run main.py --platform dy --lt qrcode --type search ^
   --keywords_file keywords.txt ^
-  --start_day 2024-04-20 ^
+  --start_day 2026-01-20 ^
   --end_day 2026-04-20 ^
   --bili_search_mode all_in_time_range ^
-  --crawler_max_notes_count 5 ^  
-  --max_notes_per_day 100
+  --crawler_max_notes_count 1 ^  
+  --max_notes_per_day 10
 ```
 crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔记数量，max_notes_per_day 参数限制了每个关键词每天最多生成的结果数量
 
@@ -191,38 +191,37 @@ crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔�
 
 #### 阶段5：需求洞察增强（可选）
 
-如果你希望对某一个关键词目录做更细化的“中学教师痛点需求”分析（包含覆盖率、证据样本、AI方向建议），可以执行：
+该脚本已升级为五大平台统一入口，输出格式与口径一致（沿用同一套痛点分类、教师词、需求词）：
 
 ```shell
-python tools/bili_pain_insight.py --run-folder 新手教师_崩溃_经历_20260426_214211
-```
+# 1) 单目录（以 bili 为例）
+python tools/pain_insight.py --platform bili --run-folder 新手教师_崩溃_经历_20260426_214211
 
-或批量处理：
+# 2) 平台内分别批量（每个目录各自产出阶段5）
+python tools/pain_insight.py --platform bili --all-sep
 
-```shell
-# 为 data/bili 下每个关键词目录分别生成自己的阶段5结果
-python tools/bili_pain_insight.py --all-sep
+# 3) 平台内全局汇总（图表 + 表格）
+python tools/pain_insight.py --platform bili --all
 
-# 汇总所有关键词目录，生成全局综合结论（图表 + 表格）
-python tools/bili_pain_insight.py --all
+# 4) 五大平台全局汇总（图表 + 表格）
+python tools/pain_insight.py --platform all --all
 ```
 
 参数说明：
-- `--run-folder`：`data/bili` 下一层要处理的目录名（必须传）
-- `--all-sep`：批量处理所有关键词目录，各目录独立输出
-- `--all`：批量聚合所有关键词目录，输出全局综合分析
-- `--data-root`：可选，默认 `data/bili`
+- `--platform`：平台标识（`bili` / `douyin` / `xhs` / `weibo` / `kuaishou` / `all`）
+- `--run-folder`：`data/<platform>` 下一层要处理的目录名（单目录模式必传）
+- `--all-sep`：平台内批量处理所有目录，各目录独立输出阶段5
+- `--all`：平台内或全平台聚合输出综合分析
+- `--data-root`：可选，默认 `data`
 
-执行后会在该目录下新增 `阶段5_需求洞察增强` 子目录，输出：
+执行后会在目标目录新增 `阶段5_需求洞察增强` 子目录，输出：
 - `pain_insight_时间戳.json`
 - `pain_insight_时间戳.md`
+- 条形图/饼图（PNG）与配套 CSV 表格
 
-若使用 `--all`，会在 `data/bili/阶段5_综合结论` 下输出：
-- 综合 JSON/Markdown 报告
-- 条形图：`chart_pain_category_bar.png`展示的痛点类别命中次数Top10
-、`chart_run_volume_bar.png`展示的目录命中次数Top12
-- 饼图：`chart_source_pie.png`展示的来源分布
-- 配套表格（CSV）：痛点统计、来源分布、目录分布、图表编码映射`table_chart_category_code_map.csv`、`table_chart_run_code_map.csv`、`table_global_pain_categories.csv`、`table_global_source_distribution.csv`、`table_global_run_distribution.csv`
+若使用 `--platform <具体平台> --all`，会在 `data/<platform>/综合结论` 下输出平台综合结论。
+
+若使用 `--platform all --all`，会在 `data/综合结论` 下输出五平台综合结论，并包含平台分布图表。
 
 
 <details>
