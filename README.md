@@ -152,6 +152,10 @@ uv run main.py --platform xhs --lt qrcode --type detail
 uv run main.py --help
 ```
 
+> 仅在 B 站 search 模式下，程序会在抓取完成后自动生成分阶段结果目录：
+> `data/bili/阶段1_原始抓取`、`data/bili/阶段2_清洗标准化`、`data/bili/阶段3_筛选结果`、`data/bili/阶段4_分析汇总`。
+> 这些阶段文件基于公开内容做规则化整理与摘要，不会额外采集个人身份信息。
+
 <details>
 <summary>🖥️ <strong>WebUI 可视化操作界面</strong></summary>
 

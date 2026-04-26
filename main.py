@@ -43,6 +43,7 @@ from media_platform.tieba import TieBaCrawler
 from media_platform.weibo import WeiboCrawler
 from media_platform.xhs import XiaoHongShuCrawler
 from media_platform.zhihu import ZhihuCrawler
+from tools.bili_search_pipeline import run_bilibili_search_pipeline
 from tools.async_file_writer import AsyncFileWriter
 from var import crawler_type_var
 
@@ -108,6 +109,9 @@ async def main() -> None:
 
     crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
     await crawler.start()
+
+    if config.PLATFORM == "bili" and config.CRAWLER_TYPE == "search":
+        run_bilibili_search_pipeline()
 
     _flush_excel_if_needed()
 
