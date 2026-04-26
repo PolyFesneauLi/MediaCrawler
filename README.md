@@ -197,13 +197,32 @@ crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔�
 python tools/bili_pain_insight.py --run-folder 新手教师_崩溃_经历_20260426_214211
 ```
 
+或批量处理：
+
+```shell
+# 为 data/bili 下每个关键词目录分别生成自己的阶段5结果
+python tools/bili_pain_insight.py --all-sep
+
+# 汇总所有关键词目录，生成全局综合结论（图表 + 表格）
+python tools/bili_pain_insight.py --all
+```
+
 参数说明：
 - `--run-folder`：`data/bili` 下一层要处理的目录名（必须传）
+- `--all-sep`：批量处理所有关键词目录，各目录独立输出
+- `--all`：批量聚合所有关键词目录，输出全局综合分析
 - `--data-root`：可选，默认 `data/bili`
 
 执行后会在该目录下新增 `阶段5_需求洞察增强` 子目录，输出：
 - `pain_insight_时间戳.json`
 - `pain_insight_时间戳.md`
+
+若使用 `--all`，会在 `data/bili/阶段5_综合结论` 下输出：
+- 综合 JSON/Markdown 报告
+- 条形图：`chart_pain_category_bar.png`展示的痛点类别命中次数Top10
+、`chart_run_volume_bar.png`展示的目录命中次数Top12
+- 饼图：`chart_source_pie.png`展示的来源分布
+- 配套表格（CSV）：痛点统计、来源分布、目录分布、图表编码映射`table_chart_category_code_map.csv`、`table_chart_run_code_map.csv`、`table_global_pain_categories.csv`、`table_global_source_distribution.csv`、`table_global_run_distribution.csv`
 
 
 <details>
