@@ -45,7 +45,7 @@ from media_platform.tieba import TieBaCrawler
 from media_platform.weibo import WeiboCrawler
 from media_platform.xhs import XiaoHongShuCrawler
 from media_platform.zhihu import ZhihuCrawler
-from tools.bili_search_pipeline import run_bilibili_search_pipeline
+from tools.search_pipeline import run_search_pipeline
 from tools.async_file_writer import AsyncFileWriter
 from var import crawler_type_var
 
@@ -71,22 +71,40 @@ class CrawlerFactory:
 
 
 crawler: Optional[AbstractCrawler] = None
+PLATFORM_DATA_ALIASES: dict[str, str] = {
+    "dy": "douyin",
+    "ks": "kuaishou",
+    "wb": "weibo",
+}
 
 
-def _collect_bili_search_source_files() -> set[Path]:
+def _collect_search_source_files(platform: str) -> set[Path]:
     data_root = Path(config.SAVE_DATA_PATH) if config.SAVE_DATA_PATH else Path("data")
-    bili_root = data_root / "bili"
+    normalized_platform = str(platform or "").strip().lower()
+    candidate_names = [normalized_platform]
+    alias = PLATFORM_DATA_ALIASES.get(normalized_platform)
+    if alias and alias not in candidate_names:
+        candidate_names.append(alias)
+
+    for short_name, long_name in PLATFORM_DATA_ALIASES.items():
+        if normalized_platform == long_name and short_name not in candidate_names:
+            candidate_names.append(short_name)
+
     source_files: set[Path] = set()
-    for pattern in ("jsonl/search_*", "json/search_*"):
-        for path in bili_root.glob(pattern):
-            if path.is_file() and path.suffix.lower() in {".jsonl", ".json"}:
-                source_files.add(path.resolve())
+    for candidate in candidate_names:
+        platform_root = data_root / candidate
+        if not platform_root.exists() or not platform_root.is_dir():
+            continue
+        for pattern in ("jsonl/search_*", "json/search_*"):
+            for path in platform_root.glob(pattern):
+                if path.is_file() and path.suffix.lower() in {".jsonl", ".json"}:
+                    source_files.add(path.resolve())
     return source_files
 
 
-def _collect_bili_search_source_snapshots() -> dict[Path, tuple[int, int]]:
+def _collect_search_source_snapshots(platform: str) -> dict[Path, tuple[int, int]]:
     snapshots: dict[Path, tuple[int, int]] = {}
-    for path in _collect_bili_search_source_files():
+    for path in _collect_search_source_files(platform):
         stat = path.stat()
         # Use nanosecond mtime + size to detect append/overwrite changes reliably.
         snapshots[path] = (int(stat.st_mtime_ns), int(stat.st_size))
@@ -154,21 +172,20 @@ async def main() -> None:
 
     keyword_lines = getattr(config, "KEYWORD_LINES", [])
     run_each_keyword = (
-        config.PLATFORM == "bili"
-        and config.CRAWLER_TYPE == "search"
+        config.CRAWLER_TYPE == "search"
         and bool(keyword_lines)
     )
 
     if run_each_keyword:
         batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        config.BILI_SEARCH_BATCH_ID = batch_id
+        config.SEARCH_BATCH_ID = batch_id
         for keyword in keyword_lines:
-            source_snapshots_before = _collect_bili_search_source_snapshots()
+            source_snapshots_before = _collect_search_source_snapshots(config.PLATFORM)
             config.KEYWORDS = keyword
-            print(f"[Main] Running Bilibili search for keyword: {keyword}")
+            print(f"[Main] Running {config.PLATFORM} search for keyword: {keyword}")
             crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
             await crawler.start()
-            source_snapshots_after = _collect_bili_search_source_snapshots()
+            source_snapshots_after = _collect_search_source_snapshots(config.PLATFORM)
             changed_source_files = sorted(
                 path
                 for path, snapshot in source_snapshots_after.items()
@@ -178,7 +195,8 @@ async def main() -> None:
                 path: source_snapshots_before.get(path, (0, 0))[1]
                 for path in changed_source_files
             }
-            run_bilibili_search_pipeline(
+            run_search_pipeline(
+                platform=config.PLATFORM,
                 source_files=changed_source_files,
                 batch_id=batch_id,
                 source_offsets=source_offsets,
@@ -188,8 +206,8 @@ async def main() -> None:
     else:
         crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
         await crawler.start()
-        if config.PLATFORM == "bili" and config.CRAWLER_TYPE == "search":
-            run_bilibili_search_pipeline()
+        if config.CRAWLER_TYPE == "search":
+            run_search_pipeline(platform=config.PLATFORM)
 
     _flush_excel_if_needed()
 

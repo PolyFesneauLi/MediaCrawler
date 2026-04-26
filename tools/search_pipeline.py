@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Bilibili search post-processing pipeline.
+"""Unified search post-processing pipeline.
 
-This module keeps the crawler unchanged and turns the raw Bilibili search
-JSON/JSONL exports into a staged dataset under ``data/bili``:
+This module keeps crawlers unchanged and turns raw search JSON/JSONL exports
+into a staged dataset under ``data/<platform>``:
 
 - 阶段1_原始抓取
 - 阶段2_清洗标准化
@@ -10,7 +10,7 @@ JSON/JSONL exports into a staged dataset under ``data/bili``:
 - 阶段4_分析汇总
 
 The pipeline is intentionally rule-based and lightweight so it can run right
-after the crawl finishes without adding new dependencies.
+after crawl finishes without adding new dependencies.
 """
 
 from __future__ import annotations
@@ -129,32 +129,50 @@ CATEGORY_RULES = {
     "技术培训无用": ["信息技术2.0", "培训", "没用", "走形式", "打卡"],
 }
 
+PLATFORM_DIR_ALIASES: dict[str, str] = {
+    "dy": "douyin",
+    "ks": "kuaishou",
+    "wb": "weibo",
+}
 
-def run_bilibili_search_pipeline(
+
+def run_search_pipeline(
+    platform: str | None = None,
     source_files: Sequence[Path] | None = None,
     batch_id: str | None = None,
     source_offsets: dict[Path, int] | None = None,
     allowed_keywords: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Run the staged post-processing pipeline for Bilibili search output."""
+    """Run staged post-processing pipeline for platform search output."""
 
+    resolved_platform = _normalize_platform(platform or getattr(config, "PLATFORM", ""))
     data_root = Path(config.SAVE_DATA_PATH) if config.SAVE_DATA_PATH else Path("data")
-    bili_root = data_root / "bili"
+    platform_root = _resolve_platform_root(data_root=data_root, platform=resolved_platform)
     if source_files is None:
-        source_files = _collect_source_files(bili_root)
+        source_files = _collect_source_files(platform_root)
     else:
         source_files = [Path(path) for path in source_files if Path(path).is_file()]
 
     if not source_files:
-        utils.logger.info("[BiliSearchPipeline] No Bilibili search exports found, skipping staged processing.")
-        return {"processed": False, "reason": "no_source_files", "data_root": str(bili_root)}
+        utils.logger.info(
+            f"[SearchPipeline][{resolved_platform}] No search exports found, skipping staged processing."
+        )
+        return {
+            "processed": False,
+            "reason": "no_source_files",
+            "platform": resolved_platform,
+            "data_root": str(platform_root),
+        }
 
-    resolved_batch_id = str(batch_id or getattr(config, "BILI_SEARCH_BATCH_ID", "")).strip()
+    resolved_batch_id = str(
+        batch_id
+        or getattr(config, "SEARCH_BATCH_ID", "")
+    ).strip()
     if not resolved_batch_id:
         resolved_batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     raw_records = _load_records(source_files, source_offsets=source_offsets)
-    raw_records = _fill_missing_source_keyword(raw_records)
+    raw_records = _fill_missing_source_keyword(raw_records, platform=resolved_platform)
     if allowed_keywords is not None:
         allowed_set = {str(keyword).strip() for keyword in allowed_keywords if str(keyword).strip()}
         if allowed_set:
@@ -165,11 +183,14 @@ def run_bilibili_search_pipeline(
             ]
 
     if not raw_records:
-        utils.logger.info("[BiliSearchPipeline] No new records after incremental filtering, skipping staged processing.")
+        utils.logger.info(
+            f"[SearchPipeline][{resolved_platform}] No new records after incremental filtering, skipping staged processing."
+        )
         return {
             "processed": False,
             "reason": "no_new_records",
-            "data_root": str(bili_root),
+            "platform": resolved_platform,
+            "data_root": str(platform_root),
             "batch_id": resolved_batch_id,
             "source_files": [str(path) for path in source_files],
         }
@@ -181,7 +202,7 @@ def run_bilibili_search_pipeline(
     bucket_summaries: list[dict[str, Any]] = []
 
     for keyword, keyword_records in buckets.items():
-        run_dir = bili_root / f"{_slugify_keyword(keyword)}_{timestamp}"
+        run_dir = platform_root / f"{_slugify_keyword(keyword)}_{timestamp}"
         raw_dir = run_dir / RAW_STAGE_DIR
         clean_dir = run_dir / CLEAN_STAGE_DIR
         filter_dir = run_dir / FILTER_STAGE_DIR
@@ -191,9 +212,9 @@ def run_bilibili_search_pipeline(
             directory.mkdir(parents=True, exist_ok=True)
 
         copied_files = _copy_source_files(source_files, raw_dir)
-        clean_records = _clean_records(keyword_records)
+        clean_records = _clean_records(keyword_records, platform=resolved_platform)
         filtered_records = _filter_records(clean_records)
-        analysis = _build_analysis(clean_records, filtered_records)
+        analysis = _build_analysis(clean_records, filtered_records, platform=resolved_platform)
 
         _write_jsonl(raw_dir / f"raw_records_{timestamp}.jsonl", keyword_records)
         _write_json(
@@ -236,7 +257,7 @@ def run_bilibili_search_pipeline(
         _write_json(analysis_dir / f"analysis_summary_{timestamp}.json", analysis)
         _write_text(analysis_dir / f"analysis_summary_{timestamp}.md", _render_analysis_markdown(analysis))
         _cleanup_previous_keyword_results_in_batch(
-            bili_root=bili_root,
+            platform_root=platform_root,
             keyword=keyword,
             current_run_dir=run_dir,
             batch_id=resolved_batch_id,
@@ -255,13 +276,14 @@ def run_bilibili_search_pipeline(
         )
 
     utils.logger.info(
-        "[BiliSearchPipeline] Completed staged processing: "
+        f"[SearchPipeline][{resolved_platform}] Completed staged processing: "
         f"keywords={len(buckets)}, raw={len(raw_records)}, clean={total_clean}, filtered={total_filtered}"
     )
     return {
         "processed": True,
+        "platform": resolved_platform,
         "batch_id": resolved_batch_id,
-        "data_root": str(bili_root),
+        "data_root": str(platform_root),
         "source_files": [str(path) for path in source_files],
         "raw_record_count": len(raw_records),
         "clean_record_count": total_clean,
@@ -270,18 +292,43 @@ def run_bilibili_search_pipeline(
     }
 
 
-def _collect_source_files(bili_root: Path) -> list[Path]:
+def _normalize_platform(platform: str) -> str:
+    value = str(platform or "").strip().lower()
+    return value or "xhs"
+
+
+def _resolve_platform_root(data_root: Path, platform: str) -> Path:
+    normalized = _normalize_platform(platform)
+    candidates = [normalized]
+
+    alias = PLATFORM_DIR_ALIASES.get(normalized)
+    if alias and alias not in candidates:
+        candidates.append(alias)
+
+    for short_name, long_name in PLATFORM_DIR_ALIASES.items():
+        if normalized == long_name and short_name not in candidates:
+            candidates.append(short_name)
+
+    for candidate in candidates:
+        candidate_path = data_root / candidate
+        if candidate_path.exists() and candidate_path.is_dir():
+            return candidate_path
+
+    return data_root / candidates[0]
+
+
+def _collect_source_files(platform_root: Path) -> list[Path]:
     allowed_suffixes = {".jsonl", ".json"}
     files: list[Path] = []
     for pattern in ("jsonl/search_*", "json/search_*"):
-        for path in bili_root.glob(pattern):
+        for path in platform_root.glob(pattern):
             if path.is_file() and path.suffix.lower() in allowed_suffixes:
                 files.append(path)
     return sorted(set(files))
 
 
 def _cleanup_previous_keyword_results_in_batch(
-    bili_root: Path,
+    platform_root: Path,
     keyword: str,
     current_run_dir: Path,
     batch_id: str,
@@ -289,7 +336,7 @@ def _cleanup_previous_keyword_results_in_batch(
     slug = _slugify_keyword(keyword)
     deleted_dirs: list[str] = []
 
-    for candidate in bili_root.glob(f"{slug}_*"):
+    for candidate in platform_root.glob(f"{slug}_*"):
         if not candidate.is_dir():
             continue
         if candidate.resolve() == current_run_dir.resolve():
@@ -308,11 +355,11 @@ def _cleanup_previous_keyword_results_in_batch(
             shutil.rmtree(candidate)
             deleted_dirs.append(str(candidate))
         except OSError as exc:
-            utils.logger.warning(f"[BiliSearchPipeline] Failed to remove old run dir {candidate}: {exc}")
+            utils.logger.warning(f"[SearchPipeline] Failed to remove old run dir {candidate}: {exc}")
 
     if deleted_dirs:
         utils.logger.info(
-            f"[BiliSearchPipeline] Removed {len(deleted_dirs)} previous same-batch result dirs for keyword '{keyword}'."
+            f"[SearchPipeline] Removed {len(deleted_dirs)} previous same-batch result dirs for keyword '{keyword}'."
         )
 
 
@@ -409,19 +456,20 @@ def _group_records_by_keyword(raw_records: Sequence[dict[str, Any]]) -> dict[str
     return buckets
 
 
-def _fill_missing_source_keyword(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _fill_missing_source_keyword(raw_records: Sequence[dict[str, Any]], platform: str) -> list[dict[str, Any]]:
     enriched_records: list[dict[str, Any]] = []
-    keyword_by_video_id: dict[str, str] = {}
+    keyword_by_content_id: dict[str, str] = {}
     keyword_by_user_id: dict[str, str] = {}
+    content_id_keys = _get_content_id_keys(platform)
 
     for record in raw_records:
         source_keyword = str(record.get("source_keyword", "")).strip()
         if not source_keyword:
             continue
 
-        video_id = str(record.get("video_id", "")).strip()
-        if video_id and video_id not in keyword_by_video_id:
-            keyword_by_video_id[video_id] = source_keyword
+        content_id = _first_non_empty(record, content_id_keys)
+        if content_id and content_id not in keyword_by_content_id:
+            keyword_by_content_id[content_id] = source_keyword
 
         user_id = str(record.get("user_id", "")).strip()
         if user_id and user_id not in keyword_by_user_id:
@@ -437,11 +485,11 @@ def _fill_missing_source_keyword(raw_records: Sequence[dict[str, Any]]) -> list[
             continue
 
         inferred_keyword = ""
-        video_id = str(record.get("video_id", "")).strip()
+        content_id = _first_non_empty(record, content_id_keys)
         user_id = str(record.get("user_id", "")).strip()
 
-        if video_id:
-            inferred_keyword = keyword_by_video_id.get(video_id, "")
+        if content_id:
+            inferred_keyword = keyword_by_content_id.get(content_id, "")
         if not inferred_keyword and user_id:
             inferred_keyword = keyword_by_user_id.get(user_id, "")
         if not inferred_keyword:
@@ -457,12 +505,19 @@ def _fill_missing_source_keyword(raw_records: Sequence[dict[str, Any]]) -> list[
     return enriched_records
 
 
-def _clean_records(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _slugify_keyword(keyword: str) -> str:
+    slug = re.sub(r"[\\/:*?\"<>|]+", "_", keyword.strip())
+    slug = re.sub(r"\s+", "_", slug)
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug[:80] or "keyword"
+
+
+def _clean_records(raw_records: Sequence[dict[str, Any]], platform: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     cleaned: list[dict[str, Any]] = []
 
     for raw_record in raw_records:
-        normalized = _normalize_record(raw_record)
+        normalized = _normalize_record(raw_record, platform=platform)
         dedupe_key = normalized["dedupe_key"]
         if dedupe_key in seen:
             continue
@@ -473,59 +528,65 @@ def _clean_records(raw_records: Sequence[dict[str, Any]]) -> list[dict[str, Any]
     return cleaned
 
 
-def _slugify_keyword(keyword: str) -> str:
-    slug = re.sub(r"[\\/:*?\"<>|]+", "_", keyword.strip())
-    slug = re.sub(r"\s+", "_", slug)
-    slug = re.sub(r"_+", "_", slug).strip("_")
-    return slug[:80] or "keyword"
-
-
-def _normalize_record(raw_record: dict[str, Any]) -> dict[str, Any]:
-    if "video_id" in raw_record:
-        entry_type = "content"
-        record_id = str(raw_record.get("video_id", ""))
-        text = " ".join(part for part in [raw_record.get("title", ""), raw_record.get("desc", "")] if part)
+def _normalize_record(raw_record: dict[str, Any], platform: str) -> dict[str, Any]:
+    normalized_platform = _normalize_platform(platform)
+    if "comment_id" in raw_record:
+        entry_type = "comment"
+        record_id = str(raw_record.get("comment_id", ""))
+        title = str(raw_record.get("title", ""))
+        text = str(raw_record.get("content", raw_record.get("text", "")))
         author_id = str(raw_record.get("user_id", ""))
         author_name = raw_record.get("nickname", "")
-        author_sign = raw_record.get("author_sign", "")
-        publish_time = _safe_int(raw_record.get("create_time"))
+        author_sign = raw_record.get("sign", raw_record.get("user_signature", raw_record.get("desc", "")))
+        publish_time = _safe_int(raw_record.get("create_time", raw_record.get("last_modify_ts", 0)))
+        metrics = {
+            "liked_count": _safe_int(raw_record.get("like_count", raw_record.get("comment_like_count", 0))),
+            "comment_count": _safe_int(raw_record.get("sub_comment_count", 0)),
+        }
+    elif _first_non_empty(raw_record, _get_content_id_keys(normalized_platform)):
+        entry_type = "content"
+        record_id = _first_non_empty(raw_record, _get_content_id_keys(normalized_platform))
+        title = str(raw_record.get("title", ""))
+        text = " ".join(
+            part
+            for part in [
+                title,
+                raw_record.get("desc", ""),
+                raw_record.get("content", ""),
+            ]
+            if part
+        )
+        author_id = str(raw_record.get("user_id", ""))
+        author_name = raw_record.get("nickname", "")
+        author_sign = raw_record.get("author_sign", raw_record.get("user_signature", raw_record.get("desc", "")))
+        publish_time = _safe_int(raw_record.get("create_time", raw_record.get("last_modify_ts", 0)))
         metrics = {
             "liked_count": _safe_int(raw_record.get("liked_count")),
-            "comment_count": _safe_int(raw_record.get("video_comment")),
-            "share_count": _safe_int(raw_record.get("video_share_count")),
-            "favorite_count": _safe_int(raw_record.get("video_favorite_count")),
+            "comment_count": _safe_int(raw_record.get("video_comment", raw_record.get("comments_count", raw_record.get("comment_count", 0)))),
+            "share_count": _safe_int(raw_record.get("video_share_count", raw_record.get("shared_count", raw_record.get("share_count", 0)))),
+            "favorite_count": _safe_int(raw_record.get("video_favorite_count", raw_record.get("collected_count", 0))),
             "coin_count": _safe_int(raw_record.get("video_coin_count")),
             "danmaku_count": _safe_int(raw_record.get("video_danmaku")),
             "play_count": _safe_int(raw_record.get("video_play_count")),
         }
-    elif "comment_id" in raw_record:
-        entry_type = "comment"
-        record_id = str(raw_record.get("comment_id", ""))
-        text = str(raw_record.get("content", ""))
-        author_id = str(raw_record.get("user_id", ""))
-        author_name = raw_record.get("nickname", "")
-        author_sign = raw_record.get("sign", "")
-        publish_time = _safe_int(raw_record.get("create_time"))
-        metrics = {
-            "liked_count": _safe_int(raw_record.get("like_count")),
-            "comment_count": _safe_int(raw_record.get("sub_comment_count")),
-        }
     elif "user_id" in raw_record:
         entry_type = "creator"
         record_id = str(raw_record.get("user_id", ""))
-        text = str(raw_record.get("sign", ""))
+        title = ""
+        text = str(raw_record.get("sign", raw_record.get("desc", raw_record.get("user_signature", ""))))
         author_id = str(raw_record.get("user_id", ""))
         author_name = raw_record.get("nickname", "")
-        author_sign = raw_record.get("sign", "")
+        author_sign = raw_record.get("sign", raw_record.get("desc", raw_record.get("user_signature", "")))
         publish_time = _safe_int(raw_record.get("last_modify_ts"))
         metrics = {
-            "fans": _safe_int(raw_record.get("total_fans")),
-            "liked_count": _safe_int(raw_record.get("total_liked")),
+            "fans": _safe_int(raw_record.get("total_fans", raw_record.get("fans", 0))),
+            "liked_count": _safe_int(raw_record.get("total_liked", raw_record.get("interaction", 0))),
             "rank": _safe_int(raw_record.get("user_rank")),
         }
     else:
         entry_type = "unknown"
         record_id = hashlib.sha1(json.dumps(raw_record, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        title = ""
         text = json.dumps(raw_record, ensure_ascii=False)
         author_id = ""
         author_name = ""
@@ -534,7 +595,7 @@ def _normalize_record(raw_record: dict[str, Any]) -> dict[str, Any]:
         metrics = {}
 
     source_keyword = str(raw_record.get("source_keyword", "")).strip()
-    title = str(raw_record.get("title", "")).strip()
+    title = title.strip() if isinstance(title, str) else str(title).strip()
     text = _normalize_text(text)
     author_text = _normalize_text(" ".join(part for part in [author_name, author_sign] if part))
     combined_text = _normalize_text(" ".join(part for part in [title, text, author_text, source_keyword] if part))
@@ -551,7 +612,7 @@ def _normalize_record(raw_record: dict[str, Any]) -> dict[str, Any]:
     content_hash = hashlib.sha1(combined_text.encode("utf-8")).hexdigest()
 
     return {
-        "platform": "bili",
+        "platform": normalized_platform,
         "entry_type": entry_type,
         "record_id": record_id,
         "source_keyword": source_keyword,
@@ -575,7 +636,7 @@ def _normalize_record(raw_record: dict[str, Any]) -> dict[str, Any]:
             "categories": categories,
         },
         "score": score,
-        "dedupe_key": f"bili:{entry_type}:{record_id}:{content_hash}",
+        "dedupe_key": f"{normalized_platform}:{entry_type}:{record_id}:{content_hash}",
     }
 
 
@@ -621,7 +682,11 @@ def _filter_records(clean_records: Sequence[dict[str, Any]]) -> list[dict[str, A
     return filtered
 
 
-def _build_analysis(clean_records: Sequence[dict[str, Any]], filtered_records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _build_analysis(
+    clean_records: Sequence[dict[str, Any]],
+    filtered_records: Sequence[dict[str, Any]],
+    platform: str,
+) -> dict[str, Any]:
     category_counter: Counter[str] = Counter()
     source_counter: Counter[str] = Counter()
     entry_type_counter: Counter[str] = Counter()
@@ -654,7 +719,7 @@ def _build_analysis(clean_records: Sequence[dict[str, Any]], filtered_records: S
 
     return {
         "generated_at": utils.get_current_date(),
-        "platform": "bili",
+        "platform": _normalize_platform(platform),
         "clean_record_count": len(clean_records),
         "filtered_record_count": len(filtered_records),
         "teacher_related_count": teacher_count,
@@ -667,8 +732,10 @@ def _build_analysis(clean_records: Sequence[dict[str, Any]], filtered_records: S
 
 
 def _render_analysis_markdown(summary: dict[str, Any]) -> str:
+    platform = str(summary.get("platform", "")).strip() or "unknown"
+    title_platform = platform.upper()
     lines = [
-        "# Bilibili Search 分析汇总",
+        f"# {title_platform} Search 分析汇总",
         "",
         f"- 生成时间：{summary.get('generated_at', '')}",
         f"- 清洗后条目数：{summary.get('clean_record_count', 0)}",
@@ -709,6 +776,29 @@ def _classify_categories(text: str) -> list[str]:
         if any(keyword in text for keyword in keywords):
             matched.append(category)
     return matched
+
+
+def _get_content_id_keys(platform: str) -> tuple[str, ...]:
+    normalized = _normalize_platform(platform)
+    if normalized == "bili":
+        return ("video_id",)
+    if normalized == "dy" or normalized == "douyin":
+        return ("aweme_id",)
+    if normalized == "xhs":
+        return ("note_id",)
+    if normalized == "wb" or normalized == "weibo":
+        return ("note_id",)
+    if normalized == "ks" or normalized == "kuaishou":
+        return ("video_id",)
+    return ("video_id", "aweme_id", "note_id")
+
+
+def _first_non_empty(raw_record: dict[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        value = str(raw_record.get(key, "")).strip()
+        if value:
+            return value
+    return ""
 
 
 def _calculate_score(engagement: int, teacher_hits: int, pain_hits: int, request_hits: int, wuhan_hits: int) -> float:
