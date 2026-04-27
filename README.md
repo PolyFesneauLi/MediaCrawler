@@ -191,14 +191,29 @@ uv run main.py --platform dy --lt qrcode --type search ^
   --end_day 2026-04-20 ^
   --search_mode all_in_time_range ^
   --crawler_max_notes_count 30
+  #知乎crawler_max_notes_count 代表？
 
+  ##百度贴吧无法跑通
   uv run main.py --platform tieba --lt qrcode --type search ^
   --keywords_file keywords.txt ^
   --start_day 2024-04-20 ^
   --end_day 2026-04-20 ^
   --search_mode all_in_time_range ^
   --crawler_max_notes_count 30
-  #知乎crawler_max_notes_count 代表？
+
+  uv run main.py --platform xhs --lt qrcode --type search ^
+  --keywords_file keywords.txt ^
+  --start_day 2024-04-20 ^
+  --end_day 2026-04-20 ^
+  --search_mode all_in_time_range ^
+  --crawler_max_notes_count 10
+
+  uv run main.py --platform ks --lt qrcode --type search ^
+  --keywords_file keywords.txt ^
+  --start_day 2024-04-20 ^
+  --end_day 2026-04-20 ^
+  --search_mode all_in_time_range ^
+  --crawler_max_notes_count 10
 ```
 crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔记数量，max_notes_per_day 参数限制了每个关键词每天最多生成的结果数量
 
