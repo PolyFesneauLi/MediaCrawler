@@ -46,6 +46,11 @@ from .exception import DataFetchError
 from .field import SearchType
 
 
+NON_FATAL_EMPTY_MSGS = {
+    "这里还没有内容",
+}
+
+
 class WeiboClient(ProxyRefreshMixin):
 
     def __init__(
@@ -93,6 +98,14 @@ class WeiboClient(ProxyRefreshMixin):
 
         ok_code = data.get("ok")
         if ok_code == 0:  # response error
+            msg = str(data.get("msg", "")).strip()
+            cards = data.get("data", {}).get("cards", [])
+            # Weibo search pagination may return ok=0 with empty cards when no more content.
+            if msg in NON_FATAL_EMPTY_MSGS and not cards:
+                utils.logger.info(
+                    f"[WeiboClient.request] request {method}:{url} reached end of pages: {msg}"
+                )
+                return data.get("data", {})
             utils.logger.error(f"[WeiboClient.request] request {method}:{url} err, res:{data}")
             raise DataFetchError(data.get("msg", "response error"))
         elif ok_code != 1:  # unknown error

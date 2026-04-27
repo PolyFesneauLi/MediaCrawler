@@ -47,7 +47,7 @@ START_DAY = "2024-01-01"
 END_DAY = "2024-01-01"
 
 # Search mode
-BILI_SEARCH_MODE = "normal"
+SEARCH_MODE = "normal"
 
 # Video definition (qn) configuration, common values:
 # 16=360p, 32=480p, 64=720p, 80=1080p, 112=1080p high bit rate, 116=1080p60, 120=4K

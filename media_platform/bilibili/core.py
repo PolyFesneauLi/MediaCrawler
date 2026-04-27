@@ -138,14 +138,14 @@ class BilibiliCrawler(AbstractCrawler):
         search bilibili video
         """
         # Search for video and retrieve their comment information.
-        if config.BILI_SEARCH_MODE == "normal":
+        if config.SEARCH_MODE == "normal":
             await self.search_by_keywords()
-        elif config.BILI_SEARCH_MODE == "all_in_time_range":
+        elif config.SEARCH_MODE == "all_in_time_range":
             await self.search_by_keywords_in_time_range(daily_limit=False)
-        elif config.BILI_SEARCH_MODE == "daily_limit_in_time_range":
+        elif config.SEARCH_MODE == "daily_limit_in_time_range":
             await self.search_by_keywords_in_time_range(daily_limit=True)
         else:
-            utils.logger.warning(f"Unknown BILI_SEARCH_MODE: {config.BILI_SEARCH_MODE}")
+            utils.logger.warning(f"Unknown SEARCH_MODE: {config.SEARCH_MODE}")
 
     @staticmethod
     async def get_pubtime_datetime(

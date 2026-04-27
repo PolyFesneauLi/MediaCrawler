@@ -329,14 +329,14 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Basic Configuration",
             ),
         ] = config.MAX_NOTES_PER_DAY,
-        bili_search_mode: Annotated[
+        search_mode: Annotated[
             str,
             typer.Option(
-                "--bili_search_mode",
-                help="Bilibili search mode (normal | all_in_time_range | daily_limit_in_time_range)",
+                "--search_mode",
+                help="Search mode (normal | all_in_time_range | daily_limit_in_time_range)",
                 rich_help_panel="Basic Configuration",
             ),
-        ] = config.BILI_SEARCH_MODE,
+        ] = config.SEARCH_MODE,
         save_data_path: Annotated[
             str,
             typer.Option(
@@ -408,7 +408,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.START_DAY = start_day
         config.END_DAY = end_day
         config.MAX_NOTES_PER_DAY = max_notes_per_day
-        config.BILI_SEARCH_MODE = bili_search_mode
+        config.SEARCH_MODE = search_mode
         config.KEYWORD_LINES = keyword_lines
         config.SAVE_DATA_PATH = save_data_path
         config.ENABLE_IP_PROXY = enable_ip_proxy_value
@@ -460,7 +460,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             start_day=config.START_DAY,
             end_day=config.END_DAY,
             max_notes_per_day=config.MAX_NOTES_PER_DAY,
-            bili_search_mode=config.BILI_SEARCH_MODE,
+            search_mode=config.SEARCH_MODE,
         )
 
     command = typer.main.get_command(app)

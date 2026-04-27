@@ -165,7 +165,7 @@ uv run main.py --platform bili --lt qrcode --type search ^
   --keywords_file keywords.txt ^
   --start_day 2024-04-20 ^
   --end_day 2026-04-20 ^
-  --bili_search_mode all_in_time_range ^
+  --search_mode all_in_time_range ^
   --crawler_max_notes_count 5 ^  
   --max_notes_per_day 100
 
@@ -173,18 +173,32 @@ uv run main.py --platform dy --lt qrcode --type search ^
   --keywords_file keywords.txt ^
   --start_day 2024-04-20 ^
   --end_day 2026-04-20 ^
-  --bili_search_mode all_in_time_range ^
+  --search_mode all_in_time_range ^
   --crawler_max_notes_count 20
-  --max_notes_per_day 100
-  ##douyin 没有 crawler_max_notes_count 参数，直接用 max_notes_per_day 来控制每天的爬取数量
+  ##douyin 没有 max_notes_per_day 参数，crawler_max_notes_count 代表每个关键词爬取的最大帖子数
 
   uv run main.py --platform wb --lt qrcode --type search ^
   --keywords_file keywords.txt ^
-  --start_day 2026-03-20 ^
+  --start_day 2024-04-20 ^
   --end_day 2026-04-20 ^
-  --bili_search_mode all_in_time_range ^
-  --crawler_max_notes_count 60
-  ##douyin 没有 crawler_max_notes_count 参数，直接用 max_notes_per_day 来控制每天的爬取数量
+  --search_mode all_in_time_range ^
+  --crawler_max_notes_count 20 
+  ##微博crawler_max_notes_count 代表每个关键词爬取的最大页数，武汉教师_吐槽只能设置10，别的可以20
+
+  uv run main.py --platform zhihu --lt qrcode --type search ^
+  --keywords_file keywords.txt ^
+  --start_day 2024-04-20 ^
+  --end_day 2026-04-20 ^
+  --search_mode all_in_time_range ^
+  --crawler_max_notes_count 30
+
+  uv run main.py --platform tieba --lt qrcode --type search ^
+  --keywords_file keywords.txt ^
+  --start_day 2024-04-20 ^
+  --end_day 2026-04-20 ^
+  --search_mode all_in_time_range ^
+  --crawler_max_notes_count 30
+  #知乎crawler_max_notes_count 代表？
 ```
 crawler_max_notes_count 参数限制了每个关键词每天最多爬取的笔记数量，max_notes_per_day 参数限制了每个关键词每天最多生成的结果数量
 

@@ -34,7 +34,7 @@ except Exception:
 STAGE1_DIR = "阶段1_原始抓取"
 STAGE5_DIR = "阶段5_需求洞察增强"
 GLOBAL_STAGE5_DIR = "综合结论"
-ALL_PLATFORMS = ["bili", "douyin", "xhs", "weibo", "kuaishou"]
+ALL_PLATFORMS = ["bili", "douyin", "xhs", "weibo", "kuaishou", "zhihu", "tieba"]
 
 PAIN_CATEGORY_TERMS: dict[str, list[str]] = {
     "备课与资源准备耗时": ["备课", "教案", "课件", "找题", "找素材", "PPT", "公开课", "磨课"],
@@ -190,6 +190,15 @@ def _extract_text_and_source(row: dict[str, Any], platform: str) -> tuple[str, s
         if "note_id" in row and "content" in row:
             text = str(row.get("content", ""))
             likes = _safe_int(row.get("liked_count"))
+            return text, "content", likes
+        if "user_id" in row:
+            text = str(row.get("desc", ""))
+            likes = _safe_int(row.get("fans", 0))
+            return text, "creator", likes
+    if platform == "zhihu":
+        if "note_id" in row and "content" in row:
+            text = str(row.get("content", ""))
+            likes = _safe_int(row.get("liked_count", row.get("voteup_count", 0)))
             return text, "content", likes
         if "user_id" in row:
             text = str(row.get("desc", ""))
@@ -943,7 +952,7 @@ def main() -> None:
     parser.add_argument(
         "--platform",
         default="bili",
-        choices=["bili", "douyin", "xhs", "weibo", "kuaishou", "all"],
+        choices=["bili", "douyin", "xhs", "weibo", "kuaishou", "zhihu", "tieba", "all"],
         help="平台选择，all 表示全平台综合",
     )
     group = parser.add_mutually_exclusive_group(required=True)
